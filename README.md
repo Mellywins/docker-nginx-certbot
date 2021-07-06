@@ -5,6 +5,7 @@ Automatically create and renew website SSL certificates using the
 Built on top of the [official Nginx Docker images][9] (both Debian and Alpine),
 and uses OpenSSL/LibreSSL to automatically create the Diffie-Hellman parameters
 used during the initial handshake of some ciphers.
+> Please Note that in the nginx.conf file u can only include server{} context as it'll be later interpolated within the nginx.conf file provided by the image
 
 > :information_source: The very first time this container is started it might
   take a long time before before it is ready to respond to requests. Read more
