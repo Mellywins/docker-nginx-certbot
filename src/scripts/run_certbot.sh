@@ -46,15 +46,42 @@ fi
 # name. The CERTBOT_EMAIL environment variable must be defined, so that
 # Let's Encrypt may contact you in case of security issues.
 #
-# $1: The name of the certificate (e.g. domain-rsa)
+# $1: The name of the certificate (e.g. domain.rsa.dns-rfc2136)
 # $2: String with all requested domains (e.g. -d domain.org -d www.domain.org)
 # $3: Type of key algorithm to use (rsa or ecdsa)
+# $4: The authenticator to use to solve the challenge
 get_certificate() {
-    info "Requesting an ${3^^} certificate for '${1}'"
+    local authenticator="${4,,}"
+    local authenticator_params=""
+    local challenge_type=""
+
+    # Add correct parameters for the different authenticator types.
+    if [ "${authenticator}" == "webroot" ]; then
+        challenge_type="http-01"
+        authenticator_params="--webroot-path=/var/www/letsencrypt"
+    elif [[ "${authenticator}" == dns-* ]]; then
+        local configfile="/etc/letsencrypt/${authenticator#dns-}.ini"
+        if [ ! -f "${configfile}" ]; then
+            error "Authenticator is '${authenticator}' but '${configfile}' is missing"
+            return 1
+        fi
+
+        challenge_type="dns-01"
+        authenticator_params="--${authenticator}-credentials=${configfile}"
+        if [ -n "${CERTBOT_DNS_PROPAGATION_SECONDS}" ]; then
+            authenticator_params="${authenticator_params} --${authenticator}-propagation-seconds=${CERTBOT_DNS_PROPAGATION_SECONDS}"
+        fi
+    else
+        error "Unknown authenticator '${authenticator}' for '${1}'"
+        return 1
+    fi
+
+    info "Requesting an ${3^^} certificate for '${1}' (${challenge_type} through ${authenticator})"
     certbot certonly \
         --agree-tos --keep -n --text \
-        -a webroot --webroot-path=/var/www/letsencrypt \
-        --preferred-challenges http-01 \
+        --preferred-challenges ${challenge_type} \
+        --authenticator ${authenticator} \
+        ${authenticator_params} \
         --email "${CERTBOT_EMAIL}" \
         --server "${letsencrypt_url}" \
         --rsa-key-size "${RSA_KEY_SIZE}" \
@@ -65,41 +92,65 @@ get_certificate() {
         --debug ${force_renew}
 }
 
-# Go through all .conf files and find all cert names for which we should create
-# certificate requests.
+# Get all the cert names for which we should create certificate requests and
+# have them signed, along with the corresponding server names.
+#
+# This will return an associative array that looks something like this:
+# "cert_name" => "server_name1 server_name2"
+declare -A certificates
 for conf_file in /etc/nginx/conf.d/*.conf*; do
-    for cert_name in $(parse_cert_names "${conf_file}"); do
-        # Determine which type of key algorithm to use for this certificate
-        # request. Having the algorithm specified in the certificate name will
-        # take precedence over the environmental variable.
-        if [[ "${cert_name,,}" =~ ^.*(-|\.)ecdsa.*$ ]]; then
-            debug "Found variant of 'ECDSA' in name '${cert_name}"
-            key_type="ecdsa"
-        elif [[ "${cert_name,,}" =~ ^.*(-|\.)ecc.*$ ]]; then
-            debug "Found variant of 'ECC' in name '${cert_name}"
-            key_type="ecdsa"
-        elif [[ "${cert_name,,}" =~ ^.*(-|\.)rsa.*$ ]]; then
-            debug "Found variant of 'RSA' in name '${cert_name}"
-            key_type="rsa"
-        elif [ "${USE_ECDSA}" == "1" ]; then
-            key_type="ecdsa"
-        else
-            key_type="rsa"
-        fi
+    parse_config_file "${conf_file}" certificates
+done
 
-        # Find all 'server_names' in this .conf file and assemble the list of
-        # domains to be included in the request.
-        domain_request=""
-        for server_name in $(parse_server_names "${conf_file}"); do
-            domain_request="${domain_request} -d ${server_name}"
-        done
+# Iterate over each key and make a certificate request for them.
+for cert_name in "${!certificates[@]}"; do
+    server_names=(${certificates["$cert_name"]})
 
-        # Hand over all the info required for the certificate request, and
-        # let certbot decide if it is necessary to update the certificate.
-        if ! get_certificate "${cert_name}" "${domain_request}" "${key_type}"; then
-            error "Certbot failed for '${cert_name}'. Check the logs for details."
-        fi
+    # Determine which type of key algorithm to use for this certificate
+    # request. Having the algorithm specified in the certificate name will
+    # take precedence over the environmental variable.
+    if [[ "${cert_name,,}" =~ (^|[-.])ecdsa([-.]|$) ]]; then
+        debug "Found variant of 'ECDSA' in name '${cert_name}"
+        key_type="ecdsa"
+    elif [[ "${cert_name,,}" =~ (^|[-.])ecc([-.]|$) ]]; then
+        debug "Found variant of 'ECC' in name '${cert_name}"
+        key_type="ecdsa"
+    elif [[ "${cert_name,,}" =~ (^|[-.])rsa([-.]|$) ]]; then
+        debug "Found variant of 'RSA' in name '${cert_name}"
+        key_type="rsa"
+    elif [ "${USE_ECDSA}" == "0" ]; then
+        key_type="rsa"
+    else
+        key_type="ecdsa"
+    fi
+
+    # Determine the authenticator to use to solve the authentication challenge.
+    # Having the authenticator specified in the certificate name will take
+    # precedence over the environmental variable.
+    if [[ "${cert_name,,}" =~ (^|[-.])webroot([-.]|$) ]]; then
+        authenticator="webroot"
+        debug "Found mention of 'webroot' in name '${cert_name}"
+    elif [[ "${cert_name,,}" =~ (^|[-.])(dns-($(echo ${CERTBOT_DNS_AUTHENTICATORS} | sed 's/ /|/g')))([-.]|$) ]]; then
+        authenticator=${BASH_REMATCH[2]}
+        debug "Found mention of authenticator '${authenticator}' in name '${cert_name}'"
+    elif [ -n "${CERTBOT_AUTHENTICATOR}" ]; then
+        authenticator="${CERTBOT_AUTHENTICATOR}"
+    else
+        authenticator="webroot"
+    fi
+
+    # Assemble the list of domains to be included in the request from
+    # the parsed 'server_names'
+    domain_request=""
+    for server_name in "${server_names[@]}"; do
+        domain_request="${domain_request} -d ${server_name}"
     done
+
+    # Hand over all the info required for the certificate request, and
+    # let certbot decide if it is necessary to update the certificate.
+    if ! get_certificate "${cert_name}" "${domain_request}" "${key_type}" "${authenticator}"; then
+        error "Certbot failed for '${cert_name}'. Check the logs for details."
+    fi
 done
 
 # After trying to get all our certificates, auto enable any configs that we

@@ -8,13 +8,17 @@ used during the initial handshake of some ciphers.
 > Please Note that in the nginx.conf file u can only include server{} context as it'll be later interpolated within the nginx.conf file provided by the image
 
 > :information_source: The very first time this container is started it might
-  take a long time before before it is ready to respond to requests. Read more
+  take a long time before it is ready to respond to requests. Read more
   about this in the
   [Diffie-Hellman parameters](./docs/good_to_know.md#diffie-hellman-parameters)
   section.
 
+> :information_source: Please use a [specific tag](./docs/dockerhub_tags.md)
+  when doing a Docker pull, since `:latest` might not always be 100% stable.
+
 ### Noteworthy Features
 - Handles multiple server names when [requesting certificates](./docs/good_to_know.md#how-the-script-add-domain-names-to-certificate-requests) (i.e. both `example.com` and `www.example.com`).
+- Handles wildcard domain request in case you use [DNS authentication](./docs/certbot_authenticators.md).
 - Can request both [RSA and ECDSA](./docs/good_to_know.md#ecdsa-and-rsa-certificates) certificates ([at the same time](./docs/advanced_usage.md#multi-certificate-setup)).
 - Will create [Diffie-Hellman parameters](./docs/good_to_know.md#diffie-hellman-parameters) if they are defined.
 - Uses the [parent container][9]'s [`/docker-entrypoint.d/`][7] folder.
@@ -65,14 +69,16 @@ instructions, from `@staticfloat`'s image, can be found
 - `CERTBOT_EMAIL`: Your e-mail address. Used by Let's Encrypt to contact you in case of security issues.
 
 ### Optional
-- `STAGING`: Set to `1` to use Let's Encrypt's [staging servers](./docs/good_to_know.md#initial-testing) (default: `0`)
 - `DHPARAM_SIZE`: The size of the [Diffie-Hellman parameters](./docs/good_to_know.md#diffie-hellman-parameters) (default: `2048`)
-- `RSA_KEY_SIZE`: The size of the RSA encryption keys (default: `2048`)
 - `ELLIPTIC_CURVE`: The size/[curve][15] of the ECDSA keys (default: `secp256r1`)
-- `USE_ECDSA`: Set to `1` to have certbot use [ECDSA instead of RSA](./docs/good_to_know.md#ecdsa-and-rsa-certificates) (default: `0`)
 - `RENEWAL_INTERVAL`: Time interval between certbot's [renewal checks](./docs/good_to_know.md#renewal-check-interval) (default: `8d`)
+- `RSA_KEY_SIZE`: The size of the RSA encryption keys (default: `2048`)
+- `STAGING`: Set to `1` to use Let's Encrypt's [staging servers](./docs/good_to_know.md#initial-testing) (default: `0`)
+- `USE_ECDSA`: Set to `0` to have certbot use [RSA instead of ECDSA](./docs/good_to_know.md#ecdsa-and-rsa-certificates) (default: `1`)
 
 ### Advanced
+- `CERTBOT_AUTHENTICATOR`: The [authenticator plugin](./docs/certbot_authenticators.md) to use when responding to challenges (default: `webroot`)
+- `CERTBOT_DNS_PROPAGATION_SECONDS`: The number of seconds to wait for the DNS challenge to [propagate](.docs/certbot_authenticators.md#troubleshooting-tips) (default: certbot's default)
 - `DEBUG`: Set to `1` to enable debug messages and use the [`nginx-debug`][10] binary (default: `0`)
 - `USE_LOCAL_CA`: Set to `1` to enable the use of a [local certificate authority](./docs/advanced_usage.md#local-ca) (default: `0`)
 
@@ -150,6 +156,22 @@ COPY conf.d/* /etc/nginx/conf.d/
 
 
 
+# Tests
+We make use of [BATS][16] to test parts of this codebase. The easiest way to
+run all the tests is to execute the following command in the root of this
+repository:
+
+```bash
+docker run -it --rm -v "$(pwd):/workdir" ffurrer/bats:latest ./tests
+```
+
+> NOTE: This image used here is based on `alpine` which makes use of busybox
+        `sort` instead of the coreutils one, and the default sorting order
+        handles `*` differently, so the tests might thus fail if run on
+        something else.
+
+
+
 # More Resources
 Here is a collection of links to other resources that provide useful
 information.
@@ -162,6 +184,8 @@ information.
   - All the tags available from Docker Hub.
 - [Advanced Usage](./docs/advanced_usage.md)
   - Information about the more advanced features this image provides.
+- [Certbot Authenticators](./docs/certbot_authenticators.md)
+  - Information on the different authenticators that are available in this image.
 - [Nginx Tips](./docs/nginx_tips.md)
   - Some interesting tips on how Nginx can be configured.
 
@@ -172,7 +196,7 @@ Here is a list of projects that use this image in various creative ways. Take
 a look and see if one of these helps or inspires you to do something similar:
 
 - [A `Node.js` application served over HTTPS in AWS Elastic Beanstalk](https://efraim-rodrigues.medium.com/using-docker-to-containerize-your-node-js-aefcd1ecd37d)
-
+- [Host your own `Nakama` server](https://www.snopekgames.com/tutorial/2021/how-host-nakama-server-10mo)
 
 
 
@@ -193,3 +217,4 @@ a look and see if one of these helps or inspires you to do something similar:
 [13]: https://portforward.com/router.htm
 [14]: https://github.com/JonasAlfredsson/docker-nginx-certbot/issues/28
 [15]: https://security.stackexchange.com/a/104991
+[16]: https://github.com/bats-core/bats-core
